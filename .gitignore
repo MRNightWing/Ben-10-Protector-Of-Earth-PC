@@ -1,0 +1,7 @@
+*.iso
+*.ISO
+game_files/
+ghidra_project/
+build/
+bin/
+.vscode/
