@@ -3,3 +3,5 @@
 * 0x0006f824 - Engine_LevelManager (Bolum Yapilandirma Yoneticisi)
 * 0x0008e298 - Engine_MainLoop (Ana Oyun ve Motor Dongusu)
 * 0x00006e94 - Engine_GetConfigParam (Motor Konfigurasyon ve Hafıza Parametre Sorgusu)
+* 0x000811ec - Engine_StreamStratWad (WAD Arşivi ve Strateji Yükleme Yöneticisi)
+* 0x0007f01c - Engine_Log (Motor İçi Formatlı Loglama Sistemi)
