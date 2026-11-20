@@ -1,0 +1,9 @@
+Level   : <Strat Wad>
+Author  : johnsanderson
+Flags   : -psp -ignoremissingtranslationtext -disableerrors -maxmodelsize 25.0 -maxedgelength 1000.0 -disableerrors -nodefaultmaplights Maps\11_01.ent
+Chunks  : 163
+Version : 1
+All meta strings:
+  '<Strat Wad>'
+  'johnsanderson'
+  '-psp -ignoremissingtranslationtext -disableerrors -maxmodelsize 25.0 -maxedgelength 1000.0 -disableerrors -nodefaultmaplights Maps\\11_01.ent'
