@@ -41,4 +41,11 @@ private:
     std::vector<Game::EnemyDrone> m_Enemies;
     Quantum::StratWad m_StratWad;
     bool m_WireframeMode = false;
+
+    // Level progression
+    Quantum::Vector3 m_ExitPortalPos = {-70.0f, -39.94f, 250.0f};
+    bool m_PortalActive = false;
+    bool m_LevelComplete = false;
+    float m_LevelCompleteTimer = 0.0f;
+    float m_GameTime = 0.0f;
 };

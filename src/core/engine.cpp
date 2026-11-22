@@ -1,4 +1,5 @@
 #include "core/engine.h"
+#include "audio/audio.h"
 #include "psp/ctrl.h"
 #include "psp/display.h"
 #include "psp/kernel.h"
@@ -79,6 +80,9 @@ bool Engine::Init(int argc, char* argv[]) {
     m_Camera.y = spawnPos.y + 25.0f;
     m_Camera.z = spawnPos.z - 50.0f;
 
+    // Initialize Audio Engine & BGM (Decompiled 0x0008E120)
+    Audio::AudioEngine::Instance().Init();
+
     m_Running = true;
     m_FrameCounter = 0;
     return true;
@@ -86,6 +90,7 @@ bool Engine::Init(int argc, char* argv[]) {
 
 void Engine::Shutdown() {
     printf("[Engine] Shutting down...\n");
+    Audio::AudioEngine::Instance().Shutdown();
     HAL_ShutdownVideo();
     m_Running = false;
 }
@@ -124,6 +129,8 @@ void Engine::MainLoop() {
 }
 
 void Engine::Tick(float dt) {
+    m_GameTime += dt;
+
     if (m_TestMode && m_FrameCounter >= 120) {
         printf("[Engine] Test run reached %u frames successfully. Exiting.\n", m_FrameCounter);
         m_Running = false;
@@ -142,8 +149,37 @@ void Engine::Tick(float dt) {
     m_Player.Update(dt, pad);
 
     // Update Enemies (Vilgax Drones AI, Combat, Lasers)
+    int aliveDrones = 0;
     for (auto& enemy : m_Enemies) {
         enemy.Update(dt, m_Player);
+        if (!enemy.IsDead()) aliveDrones++;
+    }
+
+    // Level progression trigger: Activate Canyon Exit Portal when all drones are defeated
+    if (aliveDrones == 0 && !m_PortalActive) {
+        m_PortalActive = true;
+        Audio::AudioEngine::Instance().PlaySFX(Audio::SFX_PORTAL_ACTIVE);
+        printf("[Engine] All Vilgax Drones cleared! Canyon Exit Portal active at (%.1f, %.1f, %.1f)\n",
+               m_ExitPortalPos.x, m_ExitPortalPos.y, m_ExitPortalPos.z);
+    }
+
+    // Check Player interaction with Exit Portal
+    if (m_PortalActive) {
+        const auto& pPos = m_Player.GetPosition();
+        float pdx = pPos.x - m_ExitPortalPos.x;
+        float pdz = pPos.z - m_ExitPortalPos.z;
+        float portalDist = std::sqrt(pdx * pdx + pdz * pdz);
+
+        if (portalDist < 16.0f && !m_LevelComplete) {
+            m_LevelComplete = true;
+            m_LevelCompleteTimer = 5.0f;
+            Audio::AudioEngine::Instance().PlaySFX(Audio::SFX_LEVEL_COMPLETE);
+            printf("[Engine] Player reached Exit Portal! STAGE COMPLETE!\n");
+        }
+    }
+
+    if (m_LevelComplete) {
+        m_LevelCompleteTimer -= dt;
     }
 
     // Smooth Third-Person Chase Camera
@@ -187,16 +223,25 @@ void Engine::Render() {
         HAL_Render3DMap(*map, m_Camera, m_WireframeMode);
     }
 
-    // 3. Render Enemies (Vilgax Drones + Laser Bolts + 3D Health Bars)
+    // 3. Render Exit Portal / Beacon
+    HAL_RenderExitPortal(m_ExitPortalPos, m_GameTime, m_Camera, m_PortalActive);
+
+    // 4. Render Enemies (Vilgax Drones + Laser Bolts + 3D Health Bars)
     HAL_RenderEnemies(m_Enemies, m_Camera);
 
-    // 4. Render Player (Ben 10 / Active Alien) in Solid 3D
+    // 5. Render Player (Ben 10 / Active Alien) in Solid 3D
     HAL_RenderPlayer(m_Player, m_Camera);
 
-    // 5. Render Game HUD (Ben 10 HP, Omnitrix, Alien Indicator)
+    // 6. Render Game HUD (Ben 10 HP, Omnitrix, Alien Indicator)
     HAL_RenderHUD(m_Player);
 
-    // 6. Render Diagnostics Overlay
+    // 7. Render Victory Banner if stage complete
+    if (m_LevelComplete) {
+        HAL_DrawString(160, 110, "STAGE 1-1 CLEARED!", 0xFF00FF00);
+        HAL_DrawString(130, 126, "NEXT AREA: 11_02 CATSKILL MOUNTAINS", 0xFFFFFFFF);
+    }
+
+    // 8. Render Diagnostics Overlay
     RenderDebugOverlay();
 }
 
@@ -226,6 +271,15 @@ void Engine::RenderDebugOverlay() {
     snprintf(pBuf, sizeof(pBuf), "POS: [%.1f, %.1f, %.1f] | YAW: %.2f | FORM: %s",
              pos.x, pos.y, pos.z, m_Player.GetYaw(), m_Player.GetFormName());
     HAL_DrawString(120, 34, pBuf, 0xFF88CCFF);
+
+    // Mission Objective
+    if (m_LevelComplete) {
+        HAL_DrawString(120, 46, "OBJECTIVE: MISSION COMPLETE! BEACON SECURED", 0xFF00FF00);
+    } else if (m_PortalActive) {
+        HAL_DrawString(120, 46, "OBJECTIVE: ALL DRONES CLEARED! PROCEED TO PORTAL BEACON", 0xFF00FF7F);
+    } else {
+        HAL_DrawString(120, 46, "OBJECTIVE: DEFEAT ALL VILGAX DRONES IN CANYON", 0xFFFFAA00);
+    }
 
     // Analog Stick Input Visualizer (Bottom-Right radar)
     SceCtrlData pad;

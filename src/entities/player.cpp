@@ -1,4 +1,5 @@
 #include "entities/player.h"
+#include "audio/audio.h"
 #include <cmath>
 #include <algorithm>
 #include <iostream>
@@ -109,6 +110,7 @@ void Player::TransformTo(AlienForm form) {
     m_currentForm = form;
     m_state = PlayerState::TRANSFORMING;
     m_stateTimer = 0.5f; // half-second transformation pause
+    Audio::AudioEngine::Instance().PlaySFX(Audio::SFX_OMNITRIX_TRANSFORM);
     std::cout << "[Player] Omnitrix transformed into: " << GetFormName() << std::endl;
 }
 
@@ -117,6 +119,7 @@ void Player::CycleAlien(int direction) {
     int total = static_cast<int>(AlienForm::COUNT);
     int next = (current + direction) % total;
     if (next < 0) next += total;
+    Audio::AudioEngine::Instance().PlaySFX(Audio::SFX_OMNITRIX_SELECT);
     TransformTo(static_cast<AlienForm>(next));
 }
 
@@ -209,15 +212,18 @@ void Player::Update(float dt, const SceCtrlData& pad) {
         m_velocity.y = GetJumpForce();
         m_isGrounded = false;
         m_state = PlayerState::JUMPING;
+        Audio::AudioEngine::Instance().PlaySFX(Audio::SFX_PLAYER_JUMP);
     }
 
     // Attack (SQUARE: Light Attack, TRIANGLE: Heavy Attack)
     if ((pressed & PSP_CTRL_SQUARE) && m_state != PlayerState::ATTACK_LIGHT) {
         m_state = PlayerState::ATTACK_LIGHT;
         m_stateTimer = 0.35f;
+        Audio::AudioEngine::Instance().PlaySFX(Audio::SFX_PLAYER_PUNCH);
     } else if ((pressed & PSP_CTRL_TRIANGLE) && m_state != PlayerState::ATTACK_HEAVY) {
         m_state = PlayerState::ATTACK_HEAVY;
         m_stateTimer = 0.6f;
+        Audio::AudioEngine::Instance().PlaySFX(Audio::SFX_PLAYER_SMASH);
     }
 
     // Gravity

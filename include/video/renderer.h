@@ -36,4 +36,5 @@ void HAL_Render3DMap(const Quantum::LevelMap& map, const Camera3D& camera, bool 
 void HAL_RenderPlayer(const Game::Player& player, const Camera3D& camera);
 void HAL_RenderEnemies(const std::vector<Game::EnemyDrone>& enemies, const Camera3D& camera);
 void HAL_RenderHUD(const Game::Player& player);
+void HAL_RenderExitPortal(const Quantum::Vector3& pos, float time, const Camera3D& camera, bool active);
 void HAL_DrawString(int x, int y, const char* str, u32 color);

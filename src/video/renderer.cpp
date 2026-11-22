@@ -138,8 +138,25 @@ bool HAL_PollWindowEvents() {
 }
 
 void HAL_Clear3D(u32 clearColor) {
-    std::fill(g_DebugBuffer.begin(), g_DebugBuffer.end(), clearColor);
     std::fill(g_DepthBuffer.begin(), g_DepthBuffer.end(), 1e9f);
+    // Atmospheric Canyon Sunset / Dusk Sky Gradient
+    for (int y = 0; y < PSP_SCREEN_HEIGHT; ++y) {
+        u32 col;
+        if (y < 165) {
+            float t = (float)y / 165.0f;
+            // Dusk sky gradient: Deep Navy/Indigo (25, 20, 50) -> Warm Canyon Twilight (80, 42, 35)
+            u8 r = (u8)(25.0f + 55.0f * t);
+            u8 g = (u8)(20.0f + 22.0f * t);
+            u8 b = (u8)(50.0f - 15.0f * t);
+            col = 0xFF000000 | (b << 16) | (g << 8) | r;
+        } else {
+            col = clearColor;
+        }
+        int rowIdx = y * PSP_SCREEN_BUFFER_WIDTH;
+        for (int x = 0; x < PSP_SCREEN_WIDTH; ++x) {
+            g_DebugBuffer[rowIdx + x] = col;
+        }
+    }
 }
 
 // Draw a line using Bresenham's algorithm with depth testing
@@ -309,6 +326,7 @@ void HAL_DrawString(int x, int y, const char* str, u32 color) {
     int curX = x;
     while (*str) {
         char c = *str++;
+        if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A'); // Normalize lowercase to uppercase font
         if (c < 32 || c > 126) c = ' ';
         const u8* col = FONT_5X7[c - 32];
         for (int i = 0; i < 5; ++i) {
@@ -695,6 +713,53 @@ void HAL_RenderEnemies(const std::vector<Game::EnemyDrone>& enemies, const Camer
             RasterizeBox3D(bolt.pos.x, bolt.pos.y, bolt.pos.z, 0.8f, 0.8f, 2.0f,
                            yaw, 0xFF0000FF, camera, cosYaw, sinYaw, cosPitch, sinPitch, focalLength, centerX, centerY);
         }
+    }
+}
+
+void HAL_RenderExitPortal(const Quantum::Vector3& pos, float time, const Camera3D& camera, bool active) {
+    float cosYaw = std::cos(camera.yaw);
+    float sinYaw = std::sin(camera.yaw);
+    float cosPitch = std::cos(camera.pitch);
+    float sinPitch = std::sin(camera.pitch);
+
+    float fovRad = camera.fov * (3.14159265f / 180.0f);
+    float focalLength = (PSP_SCREEN_WIDTH * 0.5f) / std::tan(fovRad * 0.5f);
+    float centerX = PSP_SCREEN_WIDTH * 0.5f;
+    float centerY = PSP_SCREEN_HEIGHT * 0.5f;
+
+    // Outer beacon ring (12 segments)
+    const int segments = 12;
+    float radius = 10.0f;
+    u32 ringColor = active ? 0xFF00FF7F : 0xFF555555; // Neon green when active, dark gray when inactive
+    u32 coreColor = active ? 0xFF00FF00 : 0xFF333333;
+
+    float pulse = std::sin(time * 3.0f) * 0.2f + 1.0f;
+    radius *= pulse;
+
+    ScreenVertex pts[segments];
+    bool valid = true;
+    for (int i = 0; i < segments; ++i) {
+        float angle = (float)i / segments * 6.2831853f + (active ? time * 1.5f : 0.0f);
+        float px = pos.x + std::cos(angle) * radius;
+        float pz = pos.z + std::sin(angle) * radius;
+        if (!ProjectPoint(px, pos.y + 0.5f, pz, camera, cosYaw, sinYaw, cosPitch, sinPitch, focalLength, centerX, centerY, pts[i])) {
+            valid = false;
+        }
+    }
+
+    if (valid) {
+        for (int i = 0; i < segments; ++i) {
+            int next = (i + 1) % segments;
+            DrawLine3D((int)pts[i].sx, (int)pts[i].sy, pts[i].sz,
+                       (int)pts[next].sx, (int)pts[next].sy, pts[next].sz, ringColor);
+        }
+    }
+
+    // Floating Omnitrix Beacon Icon
+    if (active) {
+        float floatY = pos.y + 6.0f + std::sin(time * 4.0f) * 1.0f;
+        RasterizeBox3D(pos.x, floatY, pos.z, 2.5f, 2.5f, 2.5f,
+                       time * 2.0f, coreColor, camera, cosYaw, sinYaw, cosPitch, sinPitch, focalLength, centerX, centerY);
     }
 }
 

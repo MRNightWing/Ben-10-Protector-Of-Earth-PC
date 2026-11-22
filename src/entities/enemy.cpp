@@ -1,5 +1,6 @@
 #include "entities/enemy.h"
 #include "entities/player.h"
+#include "audio/audio.h"
 #include <cmath>
 #include <algorithm>
 #include <iostream>
@@ -40,6 +41,7 @@ void EnemyDrone::FireLaser(const Quantum::Vector3& targetPos) {
     bolt.active = true;
 
     m_laserBolts.push_back(bolt);
+    Audio::AudioEngine::Instance().PlaySFX(Audio::SFX_DRONE_LASER);
 }
 
 void EnemyDrone::TakeDamage(float amount, const Quantum::Vector3& knockbackDir) {
@@ -52,11 +54,13 @@ void EnemyDrone::TakeDamage(float amount, const Quantum::Vector3& knockbackDir) 
         m_health = 0.0f;
         m_state = EnemyState::DEAD;
         m_stateTimer = 1.0f;
+        Audio::AudioEngine::Instance().PlaySFX(Audio::SFX_DRONE_EXPLODE);
         std::cout << "[Enemy] Vilgax Drone destroyed!" << std::endl;
     } else {
         m_state = EnemyState::HITSTUN;
         m_stateTimer = 0.35f;
         m_velocity = knockbackDir * 20.0f;
+        Audio::AudioEngine::Instance().PlaySFX(Audio::SFX_DRONE_HIT);
     }
 }
 
