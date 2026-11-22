@@ -1,9 +1,0 @@
-Level   : Canyon Lookout
-Author  : johnsanderson
-Flags   : -psp -ignoremissingtranslationtext -disableerrors -maxmodelsize 25.0 -maxedgelength 1000.0 -disableerrors -nodefaultmaplights Maps\11_01.amf
-Chunks  : 163
-Version : 1
-All meta strings:
-  'Canyon Lookout'
-  'johnsanderson'
-  '-psp -ignoremissingtranslationtext -disableerrors -maxmodelsize 25.0 -maxedgelength 1000.0 -disableerrors -nodefaultmaplights Maps\\11_01.amf'
