@@ -19,6 +19,7 @@ set(SOURCES
     src/main.cpp
     src/core/engine.cpp
     src/entities/player.cpp
+    src/entities/enemy.cpp
     src/platform/psp_ctrl.cpp
     src/platform/psp_display.cpp
     src/platform/psp_kernel.cpp

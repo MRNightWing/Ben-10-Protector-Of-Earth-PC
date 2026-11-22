@@ -2,8 +2,10 @@
 #include "psp/types.h"
 #include "video/renderer.h"
 #include "entities/player.h"
+#include "entities/enemy.h"
 #include "quantum/r4s_parser.h"
 #include <string>
+#include <vector>
 
 class Engine {
 public:
@@ -36,5 +38,7 @@ private:
     std::string m_InitialLevel = "11_01";
 
     Game::Player m_Player;
+    std::vector<Game::EnemyDrone> m_Enemies;
     Quantum::StratWad m_StratWad;
+    bool m_WireframeMode = false;
 };

@@ -79,6 +79,31 @@ uint32_t Player::GetFormPrimaryColor() const {
     }
 }
 
+float Player::GetAttackDamage() const {
+    float mult = (m_state == PlayerState::ATTACK_HEAVY) ? 2.2f : 1.0f;
+    switch (m_currentForm) {
+        case AlienForm::FOUR_ARMS:    return 28.0f * mult;
+        case AlienForm::HEATBLAST:    return 20.0f * mult;
+        case AlienForm::CANNONBOLT:   return 24.0f * mult;
+        case AlienForm::WILDVINE:     return 18.0f * mult;
+        case AlienForm::XLR8:         return 16.0f * mult;
+        case AlienForm::BEN_TENNYSON:
+        default:                      return 12.0f * mult;
+    }
+}
+
+float Player::GetAttackRadius() const {
+    switch (m_currentForm) {
+        case AlienForm::FOUR_ARMS:    return 24.0f;
+        case AlienForm::WILDVINE:     return 26.0f;
+        case AlienForm::HEATBLAST:    return 22.0f;
+        case AlienForm::CANNONBOLT:   return 19.0f;
+        case AlienForm::XLR8:         return 17.0f;
+        case AlienForm::BEN_TENNYSON:
+        default:                      return 15.0f;
+    }
+}
+
 void Player::TransformTo(AlienForm form) {
     if (m_currentForm == form) return;
     m_currentForm = form;

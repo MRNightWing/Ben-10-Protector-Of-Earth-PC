@@ -1,5 +1,6 @@
 #include "video/renderer.h"
 #include "entities/player.h"
+#include "entities/enemy.h"
 #include "psp/ctrl.h"
 #include <SDL2/SDL.h>
 #include <cstdio>
@@ -15,12 +16,21 @@ static SDL_Texture*  g_Texture  = nullptr;
 static void* g_EngineFramebuffer = nullptr;
 static int   g_BufferWidth = PSP_SCREEN_BUFFER_WIDTH;
 static int   g_PixelFormat = PSP_DISPLAY_PIXEL_FORMAT_8888;
+static bool  g_WireframeMode = false;
 
 // Framebuffer (512x272 32-bit ABGR)
 static std::vector<u32> g_DebugBuffer(PSP_SCREEN_BUFFER_WIDTH * PSP_SCREEN_HEIGHT, 0xFF14121A);
 
 // Depth buffer for 3D rasterization
 static std::vector<float> g_DepthBuffer(PSP_SCREEN_BUFFER_WIDTH * PSP_SCREEN_HEIGHT, 1e9f);
+
+void HAL_SetWireframeMode(bool enabled) {
+    g_WireframeMode = enabled;
+}
+
+bool HAL_GetWireframeMode() {
+    return g_WireframeMode;
+}
 
 bool HAL_InitVideo(const char* window_title, int scale) {
     if (scale < 1) scale = 2; // Default 2x integer scale = 960x544
@@ -114,8 +124,14 @@ bool HAL_PollWindowEvents() {
         if (event.type == SDL_QUIT) {
             return false;
         }
-        if (event.type == SDL_KEYDOWN && event.key.keysym.sym == SDLK_ESCAPE) {
-            return false;
+        if (event.type == SDL_KEYDOWN) {
+            if (event.key.keysym.sym == SDLK_ESCAPE) {
+                return false;
+            }
+            if (event.key.keysym.sym == SDLK_v) {
+                g_WireframeMode = !g_WireframeMode;
+                printf("[Renderer] Wireframe mode: %s\n", g_WireframeMode ? "ENABLED" : "DISABLED (Solid Shading)");
+            }
         }
     }
     return true;
@@ -143,7 +159,7 @@ static void DrawLine3D(int x0, int y0, float z0, int x1, int y1, float z1, u32 c
             float t = (float)step / totalSteps;
             float z = z0 + (z1 - z0) * t;
             int idx = y0 * PSP_SCREEN_BUFFER_WIDTH + x0;
-            if (z < g_DepthBuffer[idx] + 0.1f) {
+            if (z < g_DepthBuffer[idx] + 0.15f) {
                 g_DebugBuffer[idx] = color;
             }
         }
@@ -156,7 +172,71 @@ static void DrawLine3D(int x0, int y0, float z0, int x1, int y1, float z1, u32 c
     }
 }
 
-// Simple 5x7 bitmap font for on-screen debug display
+struct ScreenVertex {
+    float sx = 0.0f;
+    float sy = 0.0f;
+    float sz = 0.0f;
+    bool visible = false;
+};
+
+// Solid 3D Barycentric Triangle Rasterizer with Depth Buffer
+static void RasterizeTriangle3D(const ScreenVertex& sv0, const ScreenVertex& sv1, const ScreenVertex& sv2, u32 color) {
+    if (!sv0.visible || !sv1.visible || !sv2.visible) return;
+
+    int minX = std::max(0, static_cast<int>(std::floor(std::min({sv0.sx, sv1.sx, sv2.sx}))));
+    int maxX = std::min(PSP_SCREEN_WIDTH - 1, static_cast<int>(std::ceil(std::max({sv0.sx, sv1.sx, sv2.sx}))));
+    int minY = std::max(0, static_cast<int>(std::floor(std::min({sv0.sy, sv1.sy, sv2.sy}))));
+    int maxY = std::min(PSP_SCREEN_HEIGHT - 1, static_cast<int>(std::ceil(std::max({sv0.sy, sv1.sy, sv2.sy}))));
+
+    if (minX > maxX || minY > maxY) return;
+
+    float x0 = sv0.sx, y0 = sv0.sy, z0 = sv0.sz;
+    float x1 = sv1.sx, y1 = sv1.sy, z1 = sv1.sz;
+    float x2 = sv2.sx, y2 = sv2.sy, z2 = sv2.sz;
+
+    float area = (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0);
+    if (std::abs(area) < 0.0001f) return;
+
+    if (area < 0.0f) {
+        std::swap(x1, x2);
+        std::swap(y1, y2);
+        std::swap(z1, z2);
+        area = -area;
+    }
+
+    float invArea = 1.0f / area;
+    float invZ0 = 1.0f / z0;
+    float invZ1 = 1.0f / z1;
+    float invZ2 = 1.0f / z2;
+
+    for (int py = minY; py <= maxY; ++py) {
+        float py_f = py + 0.5f;
+        int rowIdx = py * PSP_SCREEN_BUFFER_WIDTH;
+
+        for (int px = minX; px <= maxX; ++px) {
+            float px_f = px + 0.5f;
+
+            float w0 = (x2 - x1) * (py_f - y1) - (y2 - y1) * (px_f - x1);
+            float w1 = (x0 - x2) * (py_f - y2) - (y0 - y2) * (px_f - x2);
+            float w2 = (x1 - x0) * (py_f - y0) - (y1 - y0) * (px_f - x0);
+
+            if (w0 >= 0.0f && w1 >= 0.0f && w2 >= 0.0f) {
+                float l0 = w0 * invArea;
+                float l1 = w1 * invArea;
+                float l2 = w2 * invArea;
+                float z = 1.0f / (l0 * invZ0 + l1 * invZ1 + l2 * invZ2);
+
+                int idx = rowIdx + px;
+                if (z > 0.5f && z < g_DepthBuffer[idx]) {
+                    g_DepthBuffer[idx] = z;
+                    g_DebugBuffer[idx] = color;
+                }
+            }
+        }
+    }
+}
+
+// 5x7 bitmap font
 static const u8 FONT_5X7[96][5] = {
     {0x00,0x00,0x00,0x00,0x00}, // 32 ' '
     {0x00,0x00,0x5F,0x00,0x00}, // 33 '!'
@@ -247,7 +327,7 @@ void HAL_DrawString(int x, int y, const char* str, u32 color) {
     }
 }
 
-// 3D Perspective Projection & Rendering
+// 3D Perspective Projection & Rendering for Map
 void HAL_Render3DMap(const Quantum::LevelMap& map, const Camera3D& camera, bool wireframe) {
     float cosYaw = std::cos(camera.yaw);
     float sinYaw = std::sin(camera.yaw);
@@ -259,13 +339,12 @@ void HAL_Render3DMap(const Quantum::LevelMap& map, const Camera3D& camera, bool 
     float centerX = PSP_SCREEN_WIDTH * 0.5f;
     float centerY = PSP_SCREEN_HEIGHT * 0.5f;
 
-    // Directional light (from upper right)
-    Quantum::Vector3 lightDir = {0.577f, 0.577f, -0.577f};
+    // Directional light (from upper right sky)
+    Quantum::Vector3 lightDir = {0.4f, 0.8f, -0.45f};
+    float lightLen = std::sqrt(lightDir.x * lightDir.x + lightDir.y * lightDir.y + lightDir.z * lightDir.z);
+    lightDir.x /= lightLen; lightDir.y /= lightLen; lightDir.z /= lightLen;
 
-    struct ScreenVertex {
-        float sx, sy, sz;
-        bool visible;
-    };
+    bool renderAsWireframe = wireframe || g_WireframeMode;
 
     for (const auto& mesh : map.meshes) {
         std::vector<ScreenVertex> screenVerts(mesh.vertices.size());
@@ -288,7 +367,7 @@ void HAL_Render3DMap(const Quantum::LevelMap& map, const Camera3D& camera, bool 
             float cz = ry * sinPitch + rz * cosPitch;
             float cx = rx;
 
-            if (cz > 0.5f) { // Near plane clip
+            if (cz > 0.5f) {
                 float invZ = 1.0f / cz;
                 screenVerts[i].sx = centerX + cx * focalLength * invZ;
                 screenVerts[i].sy = centerY - cy * focalLength * invZ;
@@ -304,19 +383,142 @@ void HAL_Render3DMap(const Quantum::LevelMap& map, const Camera3D& camera, bool 
             if (tri.v0 >= screenVerts.size() || tri.v1 >= screenVerts.size() || tri.v2 >= screenVerts.size())
                 continue;
 
-            const auto& v0 = screenVerts[tri.v0];
-            const auto& v1 = screenVerts[tri.v1];
-            const auto& v2 = screenVerts[tri.v2];
+            const auto& sv0 = screenVerts[tri.v0];
+            const auto& sv1 = screenVerts[tri.v1];
+            const auto& sv2 = screenVerts[tri.v2];
 
-            if (!v0.visible || !v1.visible || !v2.visible) continue;
+            if (!sv0.visible || !sv1.visible || !sv2.visible) continue;
 
-            // Draw Wireframe edges
-            u32 edgeColor = mesh.meshColor;
-            DrawLine3D((int)v0.sx, (int)v0.sy, v0.sz, (int)v1.sx, (int)v1.sy, v1.sz, edgeColor);
-            DrawLine3D((int)v1.sx, (int)v1.sy, v1.sz, (int)v2.sx, (int)v2.sy, v2.sz, edgeColor);
-            DrawLine3D((int)v2.sx, (int)v2.sy, v2.sz, (int)v0.sx, (int)v0.sy, v0.sz, edgeColor);
+            if (renderAsWireframe) {
+                u32 edgeColor = mesh.meshColor;
+                DrawLine3D((int)sv0.sx, (int)sv0.sy, sv0.sz, (int)sv1.sx, (int)sv1.sy, sv1.sz, edgeColor);
+                DrawLine3D((int)sv1.sx, (int)sv1.sy, sv1.sz, (int)sv2.sx, (int)sv2.sy, sv2.sz, edgeColor);
+                DrawLine3D((int)sv2.sx, (int)sv2.sy, sv2.sz, (int)sv0.sx, (int)sv0.sy, sv0.sz, edgeColor);
+            } else {
+                // Compute face normal & Lambertian directional lighting
+                const auto& p0 = mesh.vertices[tri.v0].pos;
+                const auto& p1 = mesh.vertices[tri.v1].pos;
+                const auto& p2 = mesh.vertices[tri.v2].pos;
+
+                Quantum::Vector3 e1 = p1 - p0;
+                Quantum::Vector3 e2 = p2 - p0;
+                Quantum::Vector3 norm = {
+                    e1.y * e2.z - e1.z * e2.y,
+                    e1.z * e2.x - e1.x * e2.z,
+                    e1.x * e2.y - e1.y * e2.x
+                };
+                float nlen = std::sqrt(norm.x * norm.x + norm.y * norm.y + norm.z * norm.z);
+                if (nlen > 0.0001f) {
+                    norm.x /= nlen; norm.y /= nlen; norm.z /= nlen;
+                } else {
+                    norm = {0.0f, 1.0f, 0.0f};
+                }
+
+                float dot = std::abs(norm.x * lightDir.x + norm.y * lightDir.y + norm.z * lightDir.z);
+                float intensity = std::clamp(0.40f + 0.60f * dot, 0.25f, 1.0f);
+
+                u32 baseColor = mesh.meshColor;
+                u8 a = (baseColor >> 24) & 0xFF;
+                u8 b = static_cast<u8>(std::clamp(((baseColor >> 16) & 0xFF) * intensity, 0.0f, 255.0f));
+                u8 g = static_cast<u8>(std::clamp(((baseColor >> 8) & 0xFF) * intensity, 0.0f, 255.0f));
+                u8 r = static_cast<u8>(std::clamp(((baseColor) & 0xFF) * intensity, 0.0f, 255.0f));
+                u32 shadedColor = (a << 24) | (b << 16) | (g << 8) | r;
+
+                RasterizeTriangle3D(sv0, sv1, sv2, shadedColor);
+
+                // Subtle dark edge wireframe for depth clarity
+                u32 contourColor = 0xFF181818;
+                DrawLine3D((int)sv0.sx, (int)sv0.sy, sv0.sz, (int)sv1.sx, (int)sv1.sy, sv1.sz, contourColor);
+                DrawLine3D((int)sv1.sx, (int)sv1.sy, sv1.sz, (int)sv2.sx, (int)sv2.sy, sv2.sz, contourColor);
+                DrawLine3D((int)sv2.sx, (int)sv2.sy, sv2.sz, (int)sv0.sx, (int)sv0.sy, sv0.sz, contourColor);
+            }
         }
     }
+}
+
+// Helper to project a 3D point
+static bool ProjectPoint(float wx, float wy, float wz, const Camera3D& camera,
+                         float cosYaw, float sinYaw, float cosPitch, float sinPitch,
+                         float focalLength, float centerX, float centerY,
+                         ScreenVertex& out) {
+    float tx = wx - camera.x;
+    float ty = wy - camera.y;
+    float tz = wz - camera.z;
+
+    float rx = tx * cosYaw - tz * sinYaw;
+    float rz = tx * sinYaw + tz * cosYaw;
+    float ry = ty;
+
+    float cy = ry * cosPitch - rz * sinPitch;
+    float cz = ry * sinPitch + rz * cosPitch;
+    float cx = rx;
+
+    if (cz <= 0.5f) {
+        out.visible = false;
+        return false;
+    }
+
+    out.sz = cz;
+    out.sx = centerX + cx * focalLength / cz;
+    out.sy = centerY - cy * focalLength / cz;
+    out.visible = true;
+    return true;
+}
+
+// Helper to rasterize a solid 3D oriented cuboid
+static void RasterizeBox3D(float cx, float cy, float cz,
+                           float sizeX, float sizeY, float sizeZ,
+                           float yaw, u32 baseColor,
+                           const Camera3D& camera,
+                           float cosYaw, float sinYaw, float cosPitch, float sinPitch,
+                           float focalLength, float centerX, float centerY) {
+    float hx = sizeX * 0.5f;
+    float hy = sizeY * 0.5f;
+    float hz = sizeZ * 0.5f;
+
+    float pCos = std::cos(yaw);
+    float pSin = std::sin(yaw);
+
+    float offsets[8][3] = {
+        {-hx, -hy, -hz}, {hx, -hy, -hz}, {hx, -hy, hz}, {-hx, -hy, hz},
+        {-hx,  hy, -hz}, {hx,  hy, -hz}, {hx,  hy, hz}, {-hx,  hy, hz}
+    };
+
+    ScreenVertex sv[8];
+    for (int i = 0; i < 8; ++i) {
+        float lx = offsets[i][0];
+        float ly = offsets[i][1];
+        float lz = offsets[i][2];
+
+        float rx = lx * pCos - lz * pSin;
+        float rz = lx * pSin + lz * pCos;
+
+        ProjectPoint(cx + rx, cy + ly, cz + rz, camera,
+                     cosYaw, sinYaw, cosPitch, sinPitch,
+                     focalLength, centerX, centerY, sv[i]);
+    }
+
+    // 6 Faces: 2 triangles each with basic directional tone modulation
+    auto shade = [](u32 col, float f) -> u32 {
+        u8 a = (col >> 24) & 0xFF;
+        u8 b = static_cast<u8>(std::clamp(((col >> 16) & 0xFF) * f, 0.0f, 255.0f));
+        u8 g = static_cast<u8>(std::clamp(((col >> 8) & 0xFF) * f, 0.0f, 255.0f));
+        u8 r = static_cast<u8>(std::clamp((col & 0xFF) * f, 0.0f, 255.0f));
+        return (a << 24) | (b << 16) | (g << 8) | r;
+    };
+
+    auto drawQuad = [&](int i0, int i1, int i2, int i3, float factor) {
+        u32 c = shade(baseColor, factor);
+        RasterizeTriangle3D(sv[i0], sv[i1], sv[i2], c);
+        RasterizeTriangle3D(sv[i0], sv[i2], sv[i3], c);
+    };
+
+    drawQuad(4, 5, 6, 7, 1.25f); // Top
+    drawQuad(0, 3, 2, 1, 0.60f); // Bottom
+    drawQuad(7, 6, 2, 3, 1.05f); // Front (+Z)
+    drawQuad(5, 4, 0, 1, 0.75f); // Back (-Z)
+    drawQuad(4, 7, 3, 0, 0.90f); // Left (-X)
+    drawQuad(6, 5, 1, 2, 0.90f); // Right (+X)
 }
 
 void HAL_RenderPlayer(const Game::Player& player, const Camera3D& camera) {
@@ -334,90 +536,165 @@ void HAL_RenderPlayer(const Game::Player& player, const Camera3D& camera) {
     float centerX = PSP_SCREEN_WIDTH * 0.5f;
     float centerY = PSP_SCREEN_HEIGHT * 0.5f;
 
-    auto project = [&](float wx, float wy, float wz, int& outX, int& outY, float& outZ) -> bool {
-        float tx = wx - camera.x;
-        float ty = wy - camera.y;
-        float tz = wz - camera.z;
+    float pCos = std::cos(yaw);
+    float pSin = std::sin(yaw);
 
-        float rx = tx * cosYaw - tz * sinYaw;
-        float rz = tx * sinYaw + tz * cosYaw;
-        float ry = ty;
-
-        float cy = ry * cosPitch - rz * sinPitch;
-        float cz = ry * sinPitch + rz * cosPitch;
-        float cx = rx;
-
-        if (cz <= 0.5f) return false;
-        outZ = cz;
-        outX = static_cast<int>(centerX + cx * focalLength / cz);
-        outY = static_cast<int>(centerY - cy * focalLength / cz);
-        return true;
-    };
-
-    // Draw 3D Character Bounding Volume / Rigged Wireframe Model
-    float pYawCos = std::cos(yaw);
-    float pYawSin = std::sin(yaw);
-
-    // Scaling based on alien form
-    float width = 3.0f;
-    float height = 7.0f;
+    // Form-based dimensions
+    float scale = 1.0f;
     if (player.GetCurrentForm() == Game::AlienForm::FOUR_ARMS) {
-        width = 5.0f;
-        height = 9.0f;
+        scale = 1.45f;
     } else if (player.GetCurrentForm() == Game::AlienForm::XLR8) {
-        width = 2.5f;
-        height = 7.5f;
+        scale = 1.15f;
+    } else if (player.GetCurrentForm() == Game::AlienForm::CANNONBOLT) {
+        scale = 1.35f;
     }
 
-    // 8 box vertices around character center
-    float offsets[8][3] = {
-        {-width, 0.0f,   -width},
-        { width, 0.0f,   -width},
-        { width, 0.0f,    width},
-        {-width, 0.0f,    width},
-        {-width, height, -width},
-        { width, height, -width},
-        { width, height,  width},
-        {-width, height,  width}
-    };
+    // 1. Torso
+    float torsoY = pos.y + 4.5f * scale;
+    RasterizeBox3D(pos.x, torsoY, pos.z, 3.2f * scale, 4.2f * scale, 2.0f * scale,
+                   yaw, color, camera, cosYaw, sinYaw, cosPitch, sinPitch, focalLength, centerX, centerY);
 
-    int scrX[8];
-    int scrY[8];
-    float scrZ[8];
-    bool visible[8];
+    // 2. Head
+    float headY = pos.y + 7.4f * scale;
+    RasterizeBox3D(pos.x, headY, pos.z, 2.0f * scale, 2.0f * scale, 2.0f * scale,
+                   yaw, 0xFFE0D0C0, camera, cosYaw, sinYaw, cosPitch, sinPitch, focalLength, centerX, centerY);
 
-    for (int i = 0; i < 8; ++i) {
-        // Rotate local offset by player yaw
-        float lx = offsets[i][0];
-        float ly = offsets[i][1];
-        float lz = offsets[i][2];
+    // 3. Legs
+    float legY = pos.y + 1.5f * scale;
+    float legOffset = 0.9f * scale;
+    float legL_X = pos.x - pCos * legOffset;
+    float legL_Z = pos.z + pSin * legOffset;
+    float legR_X = pos.x + pCos * legOffset;
+    float legR_Z = pos.z - pSin * legOffset;
 
-        float rx = lx * pYawCos - lz * pYawSin;
-        float rz = lx * pYawSin + lz * pYawCos;
+    u32 pantsColor = 0xFF202020; // Black pants / dark alien armor
+    RasterizeBox3D(legL_X, legY, legL_Z, 1.2f * scale, 3.0f * scale, 1.3f * scale,
+                   yaw, pantsColor, camera, cosYaw, sinYaw, cosPitch, sinPitch, focalLength, centerX, centerY);
+    RasterizeBox3D(legR_X, legY, legR_Z, 1.2f * scale, 3.0f * scale, 1.3f * scale,
+                   yaw, pantsColor, camera, cosYaw, sinYaw, cosPitch, sinPitch, focalLength, centerX, centerY);
 
-        visible[i] = project(pos.x + rx, pos.y + ly, pos.z + rz, scrX[i], scrY[i], scrZ[i]);
+    // 4. Arms
+    float armY = pos.y + 4.8f * scale;
+    float armOffset = 2.2f * scale;
+    float armL_X = pos.x - pCos * armOffset;
+    float armL_Z = pos.z + pSin * armOffset;
+    float armR_X = pos.x + pCos * armOffset;
+    float armR_Z = pos.z - pSin * armOffset;
+
+    RasterizeBox3D(armL_X, armY, armL_Z, 1.1f * scale, 3.2f * scale, 1.2f * scale,
+                   yaw, color, camera, cosYaw, sinYaw, cosPitch, sinPitch, focalLength, centerX, centerY);
+    RasterizeBox3D(armR_X, armY, armR_Z, 1.1f * scale, 3.2f * scale, 1.2f * scale,
+                   yaw, color, camera, cosYaw, sinYaw, cosPitch, sinPitch, focalLength, centerX, centerY);
+
+    // Four Arms Extra Pair of Arms
+    if (player.GetCurrentForm() == Game::AlienForm::FOUR_ARMS) {
+        float arm2Y = pos.y + 3.2f * scale;
+        float arm2Offset = 2.4f * scale;
+        float arm2L_X = pos.x - pCos * arm2Offset;
+        float arm2L_Z = pos.z + pSin * arm2Offset;
+        float arm2R_X = pos.x + pCos * arm2Offset;
+        float arm2R_Z = pos.z - pSin * arm2Offset;
+
+        RasterizeBox3D(arm2L_X, arm2Y, arm2L_Z, 1.0f * scale, 2.8f * scale, 1.1f * scale,
+                       yaw, color, camera, cosYaw, sinYaw, cosPitch, sinPitch, focalLength, centerX, centerY);
+        RasterizeBox3D(arm2R_X, arm2Y, arm2R_Z, 1.0f * scale, 2.8f * scale, 1.1f * scale,
+                       yaw, color, camera, cosYaw, sinYaw, cosPitch, sinPitch, focalLength, centerX, centerY);
     }
 
-    // Helper to draw edge
-    auto drawEdge = [&](int i0, int i1, u32 col) {
-        if (visible[i0] && visible[i1]) {
-            DrawLine3D(scrX[i0], scrY[i0], scrZ[i0], scrX[i1], scrY[i1], scrZ[i1], col);
+    // 5. Omnitrix Emblem on Chest (Glowing Neon Green Quad)
+    float chestX = pos.x - pSin * (1.1f * scale);
+    float chestZ = pos.z + pCos * (1.1f * scale);
+    float chestY = pos.y + 5.2f * scale;
+    RasterizeBox3D(chestX, chestY, chestZ, 0.8f * scale, 0.8f * scale, 0.2f * scale,
+                   yaw, 0xFF00FF00, camera, cosYaw, sinYaw, cosPitch, sinPitch, focalLength, centerX, centerY);
+
+    // 6. Attack Visual Effect (Energy Slash Arc)
+    if (player.IsAttacking()) {
+        float slashDist = 3.5f * scale;
+        float slashX = pos.x - pSin * slashDist;
+        float slashZ = pos.z + pCos * slashDist;
+        float slashY = pos.y + 4.0f * scale;
+
+        u32 vfxColor = (player.GetState() == Game::PlayerState::ATTACK_HEAVY) ? 0xFF00FFFF : 0xFFFFFFFF;
+        RasterizeBox3D(slashX, slashY, slashZ, 4.5f * scale, 0.4f * scale, 2.0f * scale,
+                       yaw + 0.4f, vfxColor, camera, cosYaw, sinYaw, cosPitch, sinPitch, focalLength, centerX, centerY);
+    }
+}
+
+void HAL_RenderEnemies(const std::vector<Game::EnemyDrone>& enemies, const Camera3D& camera) {
+    float cosYaw = std::cos(camera.yaw);
+    float sinYaw = std::sin(camera.yaw);
+    float cosPitch = std::cos(camera.pitch);
+    float sinPitch = std::sin(camera.pitch);
+
+    float fovRad = camera.fov * (3.14159265f / 180.0f);
+    float focalLength = (PSP_SCREEN_WIDTH * 0.5f) / std::tan(fovRad * 0.5f);
+    float centerX = PSP_SCREEN_WIDTH * 0.5f;
+    float centerY = PSP_SCREEN_HEIGHT * 0.5f;
+
+    for (const auto& enemy : enemies) {
+        if (enemy.IsDead()) continue;
+
+        const auto& pos = enemy.GetPosition();
+        float yaw = enemy.GetYaw();
+        float hoverY = pos.y + 6.0f + enemy.GetHoverOffset();
+
+        u32 droneColor = enemy.IsFlashing() ? 0xFFFFFFFF : 0xFF4A4240; // Steel grey
+        u32 eyeColor   = enemy.IsFlashing() ? 0xFFFFFFFF : 0xFF0000FF; // Vilgax Red eye
+
+        // Drone Chassis (Central saucer body)
+        RasterizeBox3D(pos.x, hoverY, pos.z, 3.5f, 1.8f, 3.5f,
+                       yaw, droneColor, camera, cosYaw, sinYaw, cosPitch, sinPitch, focalLength, centerX, centerY);
+
+        // Glowing Vilgax Red Eye / Sensor Dome
+        float pCos = std::cos(yaw);
+        float pSin = std::sin(yaw);
+        float eyeX = pos.x - pSin * 1.9f;
+        float eyeZ = pos.z + pCos * 1.9f;
+        RasterizeBox3D(eyeX, hoverY, eyeZ, 1.2f, 0.9f, 0.6f,
+                       yaw, eyeColor, camera, cosYaw, sinYaw, cosPitch, sinPitch, focalLength, centerX, centerY);
+
+        // Side Weapon Pods
+        float podL_X = pos.x - pCos * 2.3f;
+        float podL_Z = pos.z + pSin * 2.3f;
+        float podR_X = pos.x + pCos * 2.3f;
+        float podR_Z = pos.z - pSin * 2.3f;
+        RasterizeBox3D(podL_X, hoverY - 0.4f, podL_Z, 0.8f, 0.8f, 2.2f,
+                       yaw, 0xFF2A2220, camera, cosYaw, sinYaw, cosPitch, sinPitch, focalLength, centerX, centerY);
+        RasterizeBox3D(podR_X, hoverY - 0.4f, podR_Z, 0.8f, 0.8f, 2.2f,
+                       yaw, 0xFF2A2220, camera, cosYaw, sinYaw, cosPitch, sinPitch, focalLength, centerX, centerY);
+
+        // Overhead Health Bar
+        ScreenVertex hpV;
+        if (ProjectPoint(pos.x, hoverY + 3.5f, pos.z, camera, cosYaw, sinYaw, cosPitch, sinPitch, focalLength, centerX, centerY, hpV)) {
+            int barW = 32;
+            int barH = 4;
+            int bx = static_cast<int>(hpV.sx - barW * 0.5f);
+            int by = static_cast<int>(hpV.sy);
+
+            if (bx >= 0 && bx + barW < PSP_SCREEN_WIDTH && by >= 0 && by + barH < PSP_SCREEN_HEIGHT) {
+                float hpRatio = enemy.GetHealth() / enemy.GetMaxHealth();
+                int fillW = static_cast<int>(barW * hpRatio);
+
+                for (int y = by; y < by + barH; ++y) {
+                    for (int x = bx; x < bx + barW; ++x) {
+                        int idx = y * PSP_SCREEN_BUFFER_WIDTH + x;
+                        if (x < bx + fillW) {
+                            g_DebugBuffer[idx] = 0xFF0000FF; // Red HP
+                        } else {
+                            g_DebugBuffer[idx] = 0xFF222222; // Dark background
+                        }
+                    }
+                }
+            }
         }
-    };
 
-    // Draw base & top rectangles
-    drawEdge(0, 1, color); drawEdge(1, 2, color); drawEdge(2, 3, color); drawEdge(3, 0, color);
-    drawEdge(4, 5, color); drawEdge(5, 6, color); drawEdge(6, 7, color); drawEdge(7, 4, color);
-    // Draw pillars
-    drawEdge(0, 4, color); drawEdge(1, 5, color); drawEdge(2, 6, color); drawEdge(3, 7, color);
-
-    // Draw Facing Direction Marker (Omnitrix symbol / direction spike)
-    int fX, fY;
-    float fZ;
-    float forwardDist = width * 1.8f;
-    if (project(pos.x - pYawSin * forwardDist, pos.y + height * 0.6f, pos.z + pYawCos * forwardDist, fX, fY, fZ)) {
-        if (visible[4]) DrawLine3D(scrX[4], scrY[4], scrZ[4], fX, fY, fZ, 0xFF00FF00); // Omnitrix Green
-        if (visible[5]) DrawLine3D(scrX[5], scrY[5], scrZ[5], fX, fY, fZ, 0xFF00FF00);
+        // Render Active Laser Bolts
+        for (const auto& bolt : enemy.GetLaserBolts()) {
+            if (!bolt.active) continue;
+            RasterizeBox3D(bolt.pos.x, bolt.pos.y, bolt.pos.z, 0.8f, 0.8f, 2.0f,
+                           yaw, 0xFF0000FF, camera, cosYaw, sinYaw, cosPitch, sinPitch, focalLength, centerX, centerY);
+        }
     }
 }
 
@@ -486,6 +763,5 @@ void HAL_RenderHUD(const Game::Player& player) {
     HAL_DrawString(omX, omY + 11, statusBuf, player.GetFormPrimaryColor());
 
     // 3. Controls Legend (Bottom)
-    HAL_DrawString(10, PSP_SCREEN_HEIGHT - 12, "STICK:MOVE | X:JUMP | []:LIGHT | ^:HEAVY | L/R:TRANSFORM", 0xFFAAAAAA);
+    HAL_DrawString(10, PSP_SCREEN_HEIGHT - 12, "MOVE:STICK | X:JUMP | []:LIGHT | ^:HEAVY | L/R:OMNITRIX | V:SHADING", 0xFFAAAAAA);
 }
-

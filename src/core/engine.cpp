@@ -56,6 +56,21 @@ bool Engine::Init(int argc, char* argv[]) {
     m_Player.Reset(spawnPos);
     printf("[Engine] Spawned Ben 10 at (%.2f, %.2f, %.2f)\n", spawnPos.x, spawnPos.y, spawnPos.z);
 
+    // Spawn Enemies from Strat WAD
+    auto enemySpawns = m_StratWad.GetEnemies();
+    m_Enemies.clear();
+    for (const auto& spawn : enemySpawns) {
+        m_Enemies.emplace_back(spawn.position, Game::EnemyType::VILGAX_DRONE);
+    }
+
+    // Ensure active Vilgax Drones are present in Canyon Lookout arena
+    if (m_Enemies.size() < 3) {
+        m_Enemies.emplace_back(Quantum::Vector3{-85.0f, -39.94f, -40.0f});
+        m_Enemies.emplace_back(Quantum::Vector3{-135.0f, -39.94f, 47.0f});
+        m_Enemies.emplace_back(Quantum::Vector3{-40.0f, -39.94f, -90.0f});
+    }
+    printf("[Engine] Spawned %zu Vilgax Drones in arena\n", m_Enemies.size());
+
     // Setup Third-Person Camera
     m_Camera.yaw = 0.0f;
     m_Camera.pitch = 0.25f;
@@ -126,6 +141,11 @@ void Engine::Tick(float dt) {
     // Update Player (Ben 10) Physics, Input, and Omnitrix State
     m_Player.Update(dt, pad);
 
+    // Update Enemies (Vilgax Drones AI, Combat, Lasers)
+    for (auto& enemy : m_Enemies) {
+        enemy.Update(dt, m_Player);
+    }
+
     // Smooth Third-Person Chase Camera
     const auto& pPos = m_Player.GetPosition();
     float pYaw = m_Player.GetYaw();
@@ -161,19 +181,22 @@ void Engine::Render() {
     // 1. Clear Framebuffer to Canyon Night / Atmosphere Color (ABGR)
     HAL_Clear3D(0xFF1B1418);
 
-    // 2. Render 3D Map Geometry if loaded
+    // 2. Render 3D Map Geometry (Solid Shaded with Depth Buffer & Lighting)
     const Quantum::LevelMap* map = Quantum::StreamManager::Instance().GetCurrentMap();
     if (map) {
-        HAL_Render3DMap(*map, m_Camera, true);
+        HAL_Render3DMap(*map, m_Camera, m_WireframeMode);
     }
 
-    // 3. Render Player (Ben 10 / Active Alien) in 3D
+    // 3. Render Enemies (Vilgax Drones + Laser Bolts + 3D Health Bars)
+    HAL_RenderEnemies(m_Enemies, m_Camera);
+
+    // 4. Render Player (Ben 10 / Active Alien) in Solid 3D
     HAL_RenderPlayer(m_Player, m_Camera);
 
-    // 4. Render Game HUD (Ben 10 HP, Omnitrix, Alien Indicator)
+    // 5. Render Game HUD (Ben 10 HP, Omnitrix, Alien Indicator)
     HAL_RenderHUD(m_Player);
 
-    // 5. Render Diagnostics Overlay
+    // 6. Render Diagnostics Overlay
     RenderDebugOverlay();
 }
 
@@ -186,11 +209,14 @@ void Engine::RenderDebugOverlay() {
 
     const Quantum::LevelMap* map = Quantum::StreamManager::Instance().GetCurrentMap();
     if (map) {
+        int aliveDrones = 0;
+        for (const auto& e : m_Enemies) if (!e.IsDead()) aliveDrones++;
+
         char buf[128];
-        snprintf(buf, sizeof(buf), "LEVEL: %s (%s) | STRAT ENTITIES: %zu",
+        snprintf(buf, sizeof(buf), "LEVEL: %s | DRONES: %d ALIVE | SHADING: %s",
                  map->levelName.c_str(),
-                 Quantum::StreamManager::Instance().GetCurrentLevelId().c_str(),
-                 m_StratWad.GetEntityCount());
+                 aliveDrones,
+                 HAL_GetWireframeMode() ? "WIREFRAME" : "SOLID SHADED (Z-BUFFER)");
         HAL_DrawString(120, 22, buf, 0xFFFFFFFF);
     }
 

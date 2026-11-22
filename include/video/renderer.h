@@ -5,6 +5,7 @@
 
 namespace Game {
     class Player;
+    class EnemyDrone;
 }
 
 // Renderer API
@@ -13,6 +14,9 @@ void HAL_ShutdownVideo();
 void HAL_SetCurrentFramebuffer(void* buffer, int bufferwidth, int pixelformat);
 void HAL_PresentFrame();
 bool HAL_PollWindowEvents();
+
+void HAL_SetWireframeMode(bool enabled);
+bool HAL_GetWireframeMode();
 
 // Access internal test framebuffer
 u32* HAL_GetDebugFramebuffer();
@@ -30,5 +34,6 @@ struct Camera3D {
 void HAL_Clear3D(u32 clearColor);
 void HAL_Render3DMap(const Quantum::LevelMap& map, const Camera3D& camera, bool wireframe);
 void HAL_RenderPlayer(const Game::Player& player, const Camera3D& camera);
+void HAL_RenderEnemies(const std::vector<Game::EnemyDrone>& enemies, const Camera3D& camera);
 void HAL_RenderHUD(const Game::Player& player);
 void HAL_DrawString(int x, int y, const char* str, u32 color);

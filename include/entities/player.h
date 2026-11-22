@@ -43,6 +43,9 @@ public:
     float GetMaxHealth() const { return m_maxHealth; }
     float GetOmnitrixCharge() const { return m_omnitrixCharge; }
     bool IsGrounded() const { return m_isGrounded; }
+    bool IsAttacking() const { return m_state == PlayerState::ATTACK_LIGHT || m_state == PlayerState::ATTACK_HEAVY; }
+    float GetAttackDamage() const;
+    float GetAttackRadius() const;
 
     const char* GetFormName() const;
     uint32_t GetFormPrimaryColor() const;

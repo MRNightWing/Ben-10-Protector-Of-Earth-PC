@@ -9,3 +9,4 @@ extracted/
 extracted_test/
 wad_extracted/
 assets/
+__pycache__/
