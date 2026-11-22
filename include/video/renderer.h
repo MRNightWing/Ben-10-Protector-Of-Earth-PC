@@ -3,6 +3,10 @@
 #include "psp/display.h"
 #include "quantum/r4m_parser.h"
 
+namespace Game {
+    class Player;
+}
+
 // Renderer API
 bool HAL_InitVideo(const char* window_title, int scale);
 void HAL_ShutdownVideo();
@@ -25,4 +29,6 @@ struct Camera3D {
 
 void HAL_Clear3D(u32 clearColor);
 void HAL_Render3DMap(const Quantum::LevelMap& map, const Camera3D& camera, bool wireframe);
+void HAL_RenderPlayer(const Game::Player& player, const Camera3D& camera);
+void HAL_RenderHUD(const Game::Player& player);
 void HAL_DrawString(int x, int y, const char* str, u32 color);

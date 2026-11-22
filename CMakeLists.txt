@@ -18,11 +18,13 @@ link_directories(
 set(SOURCES
     src/main.cpp
     src/core/engine.cpp
+    src/entities/player.cpp
     src/platform/psp_ctrl.cpp
     src/platform/psp_display.cpp
     src/platform/psp_kernel.cpp
     src/video/renderer.cpp
     src/quantum/r4m_parser.cpp
+    src/quantum/r4s_parser.cpp
     src/quantum/streamer.cpp
 )
 

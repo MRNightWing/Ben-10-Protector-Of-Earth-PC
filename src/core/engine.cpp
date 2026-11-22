@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cmath>
 #include <cstring>
+#include <algorithm>
 
 Engine& Engine::Instance() {
     static Engine s_Instance;
@@ -41,17 +42,27 @@ bool Engine::Init(int argc, char* argv[]) {
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_ANALOG);
 
-    // Initial Camera Setup for Canyon Lookout
-    m_Camera.x = 60.0f;
-    m_Camera.y = 80.0f;
-    m_Camera.z = -220.0f;
-    m_Camera.yaw = 0.0f;
-    m_Camera.pitch = 0.25f;
-    m_Camera.fov = 60.0f;
-
     // Load Level 11_01 via CStreamManager (0x00081F5C)
     printf("[Engine] Loading starting level: %s\n", m_InitialLevel.c_str());
     Quantum::StreamManager::Instance().LoadMapAndStrats(m_InitialLevel);
+
+    // Load Strat WAD (Entities, Spawners, Triggers)
+    std::string stratPath = "assets/levels/" + m_InitialLevel + "/" + m_InitialLevel + ".r4s";
+    m_StratWad.Load(stratPath);
+
+    // Spawn Ben 10 at Strat Start Point
+    Quantum::Vector3 spawnPos;
+    m_StratWad.GetPlayerSpawn(spawnPos);
+    m_Player.Reset(spawnPos);
+    printf("[Engine] Spawned Ben 10 at (%.2f, %.2f, %.2f)\n", spawnPos.x, spawnPos.y, spawnPos.z);
+
+    // Setup Third-Person Camera
+    m_Camera.yaw = 0.0f;
+    m_Camera.pitch = 0.25f;
+    m_Camera.fov = 60.0f;
+    m_Camera.x = spawnPos.x;
+    m_Camera.y = spawnPos.y + 25.0f;
+    m_Camera.z = spawnPos.z - 50.0f;
 
     m_Running = true;
     m_FrameCounter = 0;
@@ -112,48 +123,37 @@ void Engine::Tick(float dt) {
         m_Running = false;
     }
 
-    // Camera Rotation via Analog Stick
-    float stickX = (pad.Lx - 128) / 128.0f;
-    float stickY = (pad.Ly - 128) / 128.0f;
+    // Update Player (Ben 10) Physics, Input, and Omnitrix State
+    m_Player.Update(dt, pad);
 
-    if (std::abs(stickX) > 0.15f) {
-        m_Camera.yaw += stickX * 2.0f * dt;
-    }
-    if (std::abs(stickY) > 0.15f) {
-        m_Camera.pitch += stickY * 2.0f * dt;
-        if (m_Camera.pitch > 1.4f) m_Camera.pitch = 1.4f;
-        if (m_Camera.pitch < -1.4f) m_Camera.pitch = -1.4f;
-    }
+    // Smooth Third-Person Chase Camera
+    const auto& pPos = m_Player.GetPosition();
+    float pYaw = m_Player.GetYaw();
 
-    // Camera Movement via D-Pad
-    float moveSpeed = 120.0f * dt;
-    float sinY = std::sin(m_Camera.yaw);
-    float cosY = std::cos(m_Camera.yaw);
+    const float chaseDist = 55.0f;
+    const float chaseHeight = 28.0f;
+    float targetCamX = pPos.x - std::sin(pYaw) * chaseDist;
+    float targetCamZ = pPos.z - std::cos(pYaw) * chaseDist;
+    float targetCamY = pPos.y + chaseHeight;
 
-    if (pad.Buttons & PSP_CTRL_UP) {
-        m_Camera.x += sinY * moveSpeed;
-        m_Camera.z += cosY * moveSpeed;
-    }
-    if (pad.Buttons & PSP_CTRL_DOWN) {
-        m_Camera.x -= sinY * moveSpeed;
-        m_Camera.z -= cosY * moveSpeed;
-    }
-    if (pad.Buttons & PSP_CTRL_LEFT) {
-        m_Camera.x -= cosY * moveSpeed;
-        m_Camera.z += sinY * moveSpeed;
-    }
-    if (pad.Buttons & PSP_CTRL_RIGHT) {
-        m_Camera.x += cosY * moveSpeed;
-        m_Camera.z -= sinY * moveSpeed;
-    }
+    // Smooth camera lag
+    float followSpeed = 6.0f;
+    m_Camera.x += (targetCamX - m_Camera.x) * followSpeed * dt;
+    m_Camera.y += (targetCamY - m_Camera.y) * followSpeed * dt;
+    m_Camera.z += (targetCamZ - m_Camera.z) * followSpeed * dt;
 
-    // Height adjustment via Shoulder Triggers (L / R)
-    if (pad.Buttons & PSP_CTRL_LTRIGGER) m_Camera.y += moveSpeed;
-    if (pad.Buttons & PSP_CTRL_RTRIGGER) m_Camera.y -= moveSpeed;
+    // Camera look angle (faces Ben)
+    float dx = pPos.x - m_Camera.x;
+    float dz = pPos.z - m_Camera.z;
+    m_Camera.yaw = std::atan2(dx, dz);
+    m_Camera.pitch = 0.22f;
 
-    // Slow turntable auto-rotation in test mode to show off 3D geometry
+    // Test mode simulated movement
     if (m_TestMode) {
-        m_Camera.yaw += 0.02f;
+        // Automatically cycle alien form during test mode to verify all states
+        if (m_FrameCounter == 30)  m_Player.CycleAlien(1);  // Four Arms
+        if (m_FrameCounter == 60)  m_Player.CycleAlien(1);  // Heatblast
+        if (m_FrameCounter == 90)  m_Player.CycleAlien(1);  // XLR8
     }
 }
 
@@ -167,7 +167,13 @@ void Engine::Render() {
         HAL_Render3DMap(*map, m_Camera, true);
     }
 
-    // 3. Render HUD and Diagnostics
+    // 3. Render Player (Ben 10 / Active Alien) in 3D
+    HAL_RenderPlayer(m_Player, m_Camera);
+
+    // 4. Render Game HUD (Ben 10 HP, Omnitrix, Alien Indicator)
+    HAL_RenderHUD(m_Player);
+
+    // 5. Render Diagnostics Overlay
     RenderDebugOverlay();
 }
 
@@ -176,41 +182,39 @@ void Engine::RenderDebugOverlay() {
     if (!fb) return;
 
     // Header HUD
-    HAL_DrawString(8, 8, "BEN 10: PROTECTOR OF EARTH - PC PORT (C++20/SDL2)", 0xFF00FF88);
+    HAL_DrawString(120, 10, "BEN 10: PROTECTOR OF EARTH [QUANTUM ENGINE PC]", 0xFF00FF88);
 
     const Quantum::LevelMap* map = Quantum::StreamManager::Instance().GetCurrentMap();
     if (map) {
         char buf[128];
-        snprintf(buf, sizeof(buf), "LEVEL: %s (%s)", map->levelName.c_str(), Quantum::StreamManager::Instance().GetCurrentLevelId().c_str());
-        HAL_DrawString(8, 20, buf, 0xFFFFFFFF);
-
-        snprintf(buf, sizeof(buf), "MESHES: %zu  VERTS: %zu  TRIS: %zu", map->meshes.size(), map->totalVertices, map->totalTriangles);
-        HAL_DrawString(8, 30, buf, 0xFF88CCFF);
+        snprintf(buf, sizeof(buf), "LEVEL: %s (%s) | STRAT ENTITIES: %zu",
+                 map->levelName.c_str(),
+                 Quantum::StreamManager::Instance().GetCurrentLevelId().c_str(),
+                 m_StratWad.GetEntityCount());
+        HAL_DrawString(120, 22, buf, 0xFFFFFFFF);
     }
 
-    // Camera Stats
-    char camBuf[128];
-    snprintf(camBuf, sizeof(camBuf), "CAM: [%.1f, %.1f, %.1f] YAW: %.2f PITCH: %.2f",
-             m_Camera.x, m_Camera.y, m_Camera.z, m_Camera.yaw, m_Camera.pitch);
-    HAL_DrawString(8, 42, camBuf, 0xFFAAAAAA);
-
-    // Controls Helper
-    HAL_DrawString(8, PSP_SCREEN_HEIGHT - 16, "STICK: ROTATE | DPAD: MOVE | L/R: ELEVATION | SEL+START: EXIT", 0xFF66EE66);
+    // Player position stats
+    const auto& pos = m_Player.GetPosition();
+    char pBuf[128];
+    snprintf(pBuf, sizeof(pBuf), "POS: [%.1f, %.1f, %.1f] | YAW: %.2f | FORM: %s",
+             pos.x, pos.y, pos.z, m_Player.GetYaw(), m_Player.GetFormName());
+    HAL_DrawString(120, 34, pBuf, 0xFF88CCFF);
 
     // Analog Stick Input Visualizer (Bottom-Right radar)
     SceCtrlData pad;
     sceCtrlReadBufferPositive(&pad, 1);
 
-    int center_x = PSP_SCREEN_WIDTH - 30;
-    int center_y = PSP_SCREEN_HEIGHT - 30;
-    int stick_off_x = (int)((pad.Lx - 128) * 0.15f);
-    int stick_off_y = (int)((pad.Ly - 128) * 0.15f);
+    int center_x = PSP_SCREEN_WIDTH - 25;
+    int center_y = PSP_SCREEN_HEIGHT - 25;
+    int stick_off_x = (int)((pad.Lx - 128) * 0.12f);
+    int stick_off_y = (int)((pad.Ly - 128) * 0.12f);
 
     // Draw circular boundary
-    for (int dy = -18; dy <= 18; ++dy) {
-        for (int dx = -18; dx <= 18; ++dx) {
+    for (int dy = -15; dy <= 15; ++dy) {
+        for (int dx = -15; dx <= 15; ++dx) {
             int dsq = dx * dx + dy * dy;
-            if (dsq >= 16 * 16 && dsq <= 18 * 18) {
+            if (dsq >= 13 * 13 && dsq <= 15 * 15) {
                 int px = center_x + dx;
                 int py = center_y + dy;
                 if (px >= 0 && px < PSP_SCREEN_WIDTH && py >= 0 && py < PSP_SCREEN_HEIGHT) {
@@ -221,8 +225,8 @@ void Engine::RenderDebugOverlay() {
     }
 
     // Draw cursor
-    for (int dy = -3; dy <= 3; ++dy) {
-        for (int dx = -3; dx <= 3; ++dx) {
+    for (int dy = -2; dy <= 2; ++dy) {
+        for (int dx = -2; dx <= 2; ++dx) {
             int px = center_x + stick_off_x + dx;
             int py = center_y + stick_off_y + dy;
             if (px >= 0 && px < PSP_SCREEN_WIDTH && py >= 0 && py < PSP_SCREEN_HEIGHT) {

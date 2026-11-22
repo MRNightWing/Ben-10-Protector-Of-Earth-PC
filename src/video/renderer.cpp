@@ -1,4 +1,5 @@
 #include "video/renderer.h"
+#include "entities/player.h"
 #include "psp/ctrl.h"
 #include <SDL2/SDL.h>
 #include <cstdio>
@@ -317,3 +318,174 @@ void HAL_Render3DMap(const Quantum::LevelMap& map, const Camera3D& camera, bool 
         }
     }
 }
+
+void HAL_RenderPlayer(const Game::Player& player, const Camera3D& camera) {
+    const auto& pos = player.GetPosition();
+    float yaw = player.GetYaw();
+    u32 color = player.GetFormPrimaryColor();
+
+    float cosYaw = std::cos(camera.yaw);
+    float sinYaw = std::sin(camera.yaw);
+    float cosPitch = std::cos(camera.pitch);
+    float sinPitch = std::sin(camera.pitch);
+
+    float fovRad = camera.fov * (3.14159265f / 180.0f);
+    float focalLength = (PSP_SCREEN_WIDTH * 0.5f) / std::tan(fovRad * 0.5f);
+    float centerX = PSP_SCREEN_WIDTH * 0.5f;
+    float centerY = PSP_SCREEN_HEIGHT * 0.5f;
+
+    auto project = [&](float wx, float wy, float wz, int& outX, int& outY, float& outZ) -> bool {
+        float tx = wx - camera.x;
+        float ty = wy - camera.y;
+        float tz = wz - camera.z;
+
+        float rx = tx * cosYaw - tz * sinYaw;
+        float rz = tx * sinYaw + tz * cosYaw;
+        float ry = ty;
+
+        float cy = ry * cosPitch - rz * sinPitch;
+        float cz = ry * sinPitch + rz * cosPitch;
+        float cx = rx;
+
+        if (cz <= 0.5f) return false;
+        outZ = cz;
+        outX = static_cast<int>(centerX + cx * focalLength / cz);
+        outY = static_cast<int>(centerY - cy * focalLength / cz);
+        return true;
+    };
+
+    // Draw 3D Character Bounding Volume / Rigged Wireframe Model
+    float pYawCos = std::cos(yaw);
+    float pYawSin = std::sin(yaw);
+
+    // Scaling based on alien form
+    float width = 3.0f;
+    float height = 7.0f;
+    if (player.GetCurrentForm() == Game::AlienForm::FOUR_ARMS) {
+        width = 5.0f;
+        height = 9.0f;
+    } else if (player.GetCurrentForm() == Game::AlienForm::XLR8) {
+        width = 2.5f;
+        height = 7.5f;
+    }
+
+    // 8 box vertices around character center
+    float offsets[8][3] = {
+        {-width, 0.0f,   -width},
+        { width, 0.0f,   -width},
+        { width, 0.0f,    width},
+        {-width, 0.0f,    width},
+        {-width, height, -width},
+        { width, height, -width},
+        { width, height,  width},
+        {-width, height,  width}
+    };
+
+    int scrX[8];
+    int scrY[8];
+    float scrZ[8];
+    bool visible[8];
+
+    for (int i = 0; i < 8; ++i) {
+        // Rotate local offset by player yaw
+        float lx = offsets[i][0];
+        float ly = offsets[i][1];
+        float lz = offsets[i][2];
+
+        float rx = lx * pYawCos - lz * pYawSin;
+        float rz = lx * pYawSin + lz * pYawCos;
+
+        visible[i] = project(pos.x + rx, pos.y + ly, pos.z + rz, scrX[i], scrY[i], scrZ[i]);
+    }
+
+    // Helper to draw edge
+    auto drawEdge = [&](int i0, int i1, u32 col) {
+        if (visible[i0] && visible[i1]) {
+            DrawLine3D(scrX[i0], scrY[i0], scrZ[i0], scrX[i1], scrY[i1], scrZ[i1], col);
+        }
+    };
+
+    // Draw base & top rectangles
+    drawEdge(0, 1, color); drawEdge(1, 2, color); drawEdge(2, 3, color); drawEdge(3, 0, color);
+    drawEdge(4, 5, color); drawEdge(5, 6, color); drawEdge(6, 7, color); drawEdge(7, 4, color);
+    // Draw pillars
+    drawEdge(0, 4, color); drawEdge(1, 5, color); drawEdge(2, 6, color); drawEdge(3, 7, color);
+
+    // Draw Facing Direction Marker (Omnitrix symbol / direction spike)
+    int fX, fY;
+    float fZ;
+    float forwardDist = width * 1.8f;
+    if (project(pos.x - pYawSin * forwardDist, pos.y + height * 0.6f, pos.z + pYawCos * forwardDist, fX, fY, fZ)) {
+        if (visible[4]) DrawLine3D(scrX[4], scrY[4], scrZ[4], fX, fY, fZ, 0xFF00FF00); // Omnitrix Green
+        if (visible[5]) DrawLine3D(scrX[5], scrY[5], scrZ[5], fX, fY, fZ, 0xFF00FF00);
+    }
+}
+
+void HAL_RenderHUD(const Game::Player& player) {
+    // 1. Health Bar (Top Left)
+    int hpX = 10;
+    int hpY = 10;
+    int barW = 100;
+    int barH = 8;
+
+    // Background border
+    for (int y = hpY - 1; y <= hpY + barH; ++y) {
+        for (int x = hpX - 1; x <= hpX + barW; ++x) {
+            if (x >= 0 && x < PSP_SCREEN_WIDTH && y >= 0 && y < PSP_SCREEN_HEIGHT) {
+                if (x == hpX - 1 || x == hpX + barW || y == hpY - 1 || y == hpY + barH) {
+                    g_DebugBuffer[y * PSP_SCREEN_BUFFER_WIDTH + x] = 0xFFFFFFFF; // White border
+                } else {
+                    g_DebugBuffer[y * PSP_SCREEN_BUFFER_WIDTH + x] = 0xFF330000; // Dark red empty
+                }
+            }
+        }
+    }
+
+    // Filled health
+    int fillW = static_cast<int>((player.GetHealth() / player.GetMaxHealth()) * barW);
+    fillW = std::clamp(fillW, 0, barW);
+    for (int y = hpY; y < hpY + barH; ++y) {
+        for (int x = hpX; x < hpX + fillW; ++x) {
+            if (x >= 0 && x < PSP_SCREEN_WIDTH && y >= 0 && y < PSP_SCREEN_HEIGHT) {
+                g_DebugBuffer[y * PSP_SCREEN_BUFFER_WIDTH + x] = 0xFF00D000; // Bright green HP
+            }
+        }
+    }
+
+    HAL_DrawString(hpX, hpY + 11, "BEN 10 HP", 0xFF00FF00);
+
+    // 2. Omnitrix Energy Bar
+    int omX = 10;
+    int omY = 32;
+    int omFillW = static_cast<int>((player.GetOmnitrixCharge() / 100.0f) * barW);
+    omFillW = std::clamp(omFillW, 0, barW);
+
+    for (int y = omY - 1; y <= omY + barH; ++y) {
+        for (int x = omX - 1; x <= omX + barW; ++x) {
+            if (x >= 0 && x < PSP_SCREEN_WIDTH && y >= 0 && y < PSP_SCREEN_HEIGHT) {
+                if (x == omX - 1 || x == omX + barW || y == omY - 1 || y == omY + barH) {
+                    g_DebugBuffer[y * PSP_SCREEN_BUFFER_WIDTH + x] = 0xFFFFFFFF;
+                } else {
+                    g_DebugBuffer[y * PSP_SCREEN_BUFFER_WIDTH + x] = 0xFF002222;
+                }
+            }
+        }
+    }
+
+    for (int y = omY; y < omY + barH; ++y) {
+        for (int x = omX; x < omX + omFillW; ++x) {
+            if (x >= 0 && x < PSP_SCREEN_WIDTH && y >= 0 && y < PSP_SCREEN_HEIGHT) {
+                g_DebugBuffer[y * PSP_SCREEN_BUFFER_WIDTH + x] = 0xFF00FF7F; // Omnitrix Neon Green
+            }
+        }
+    }
+
+    // Active Alien Name & State
+    char statusBuf[64];
+    std::snprintf(statusBuf, sizeof(statusBuf), "FORM: %s", player.GetFormName());
+    HAL_DrawString(omX, omY + 11, statusBuf, player.GetFormPrimaryColor());
+
+    // 3. Controls Legend (Bottom)
+    HAL_DrawString(10, PSP_SCREEN_HEIGHT - 12, "STICK:MOVE | X:JUMP | []:LIGHT | ^:HEAVY | L/R:TRANSFORM", 0xFFAAAAAA);
+}
+
