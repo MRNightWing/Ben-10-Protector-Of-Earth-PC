@@ -5,3 +5,6 @@ ghidra_project/
 build/
 bin/
 .vscode/
+extracted/
+extracted_test/
+wad_extracted/
