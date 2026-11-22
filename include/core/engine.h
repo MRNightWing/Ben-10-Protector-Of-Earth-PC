@@ -1,5 +1,7 @@
 #pragma once
 #include "psp/types.h"
+#include "video/renderer.h"
+#include <string>
 
 class Engine {
 public:
@@ -24,4 +26,7 @@ private:
     bool m_Running = false;
     bool m_TestMode = false;
     u32  m_FrameCounter = 0;
+
+    Camera3D m_Camera;
+    std::string m_InitialLevel = "11_01";
 };

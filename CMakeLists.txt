@@ -22,6 +22,8 @@ set(SOURCES
     src/platform/psp_display.cpp
     src/platform/psp_kernel.cpp
     src/video/renderer.cpp
+    src/quantum/r4m_parser.cpp
+    src/quantum/streamer.cpp
 )
 
 add_executable(ben10_pc ${SOURCES})
